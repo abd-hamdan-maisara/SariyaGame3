@@ -31,6 +31,7 @@ x64/
 x86/
 [Aa][Rr][Mm]/
 [Aa][Rr][Mm]64/
+obj/x64/
 
 # Preserve openFrameworks app assets
 # Re-include the specific bin dir, then ignore all inside except data/
@@ -91,3 +92,12 @@ ipch/
 *.log
 *.dmp
 /packages/
+SystemApp/obj/x64/Debug/App.baml
+SystemApp/obj/x64/Debug/GeneratedInternalTypeHelper.g.cs
+SystemApp/obj/x64/Debug/KinectCalibrationWPF.csproj.FileListAbsolute.txt
+SystemApp/obj/x64/Debug/KinectCalibrationWPF.exe
+SystemApp/obj/x64/Debug/KinectCalibrationWPF.g.resources
+SystemApp/obj/x64/Debug/KinectCalibrationWPF.pdb
+SystemApp/obj/x64/Debug/KinectCalibrationWPF_MarkupCompile.cache
+SystemApp/obj/x64/Debug/KinectCalibrationWPF_MarkupCompile.lref
+SystemApp/obj/x64/Debug/MainWindow.baml
