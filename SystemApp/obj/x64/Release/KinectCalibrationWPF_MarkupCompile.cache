@@ -4,16 +4,16 @@
 winexe
 C#
 .cs
-C:\Users\musta\Downloads\Kinect Projects\SariyaGame3\SystemApp\obj\x64\Release\
+C:\Users\Admin\Documents\GitHub\SariyaGame3\SystemApp\obj\x64\Release\
 KinectCalibrationWPF
 none
 false
 TRACE
-C:\Users\musta\Downloads\Kinect Projects\SariyaGame3\SystemApp\App.xaml
+C:\Users\Admin\Documents\GitHub\SariyaGame3\SystemApp\App.xaml
 5-1803423955
-
+41429170869
 11-1669408304
-1815170775
+28-1210500815
 MainWindow.xaml;CalibrationWizard\Screen2_MarkerAlignment.xaml;CalibrationWizard\Screen3_TouchTest.xaml;CalibrationWizard\ProjectorWindow.xaml;CalibrationWizard\CalibrationWizardWindow.xaml;
 
 True

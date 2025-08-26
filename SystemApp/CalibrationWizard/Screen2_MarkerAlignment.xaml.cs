@@ -30,7 +30,10 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		private double[] markerX = new double[4];
 		private double[] markerY = new double[4];
 		private BitmapSource qrBitmapSource;
+		private bool _usingRealMarkers = false;
 		private const int QrBaseSize = 300;
+		private Point2f[][] _detectedCorners;
+		private int[] _detectedIds;
 		private double _currentContrast = 1.2;
 		private double _currentBrightnessThreshold = 200.0;
 		private int _hueMin = 0;
@@ -45,6 +48,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			cameraUpdateTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
 			cameraUpdateTimer.Tick += cameraUpdateTimer_Tick;
 			cameraUpdateTimer.Start();
+			this.KeyDown += Screen2_KeyDown;
+			this.Focusable = true;
 		}
 
 		private void cameraUpdateTimer_Tick(object sender, EventArgs e)
@@ -55,7 +60,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				if (src != null)
 				{
 					// Always show the unprocessed color feed
-					CameraFeedImage.Source = src;
+					CameraFeed.Source = src;
 
 					// Also produce and show the real-time HSV mask in black & white
 					int hueMin = HueSlider != null ? (int)HueSlider.Value : _hueMin;
@@ -77,7 +82,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 								mask);
 							var wbMask = mask.ToWriteableBitmap();
 							wbMask.Freeze();
-							FilteredCameraFeedImage.Source = wbMask;
+							FilteredPreview.Source = wbMask;
 						}
 					}
 				}
@@ -98,6 +103,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				projectorWindow.Top = second.Top;
 				projectorWindow.Width = second.Width;
 				projectorWindow.Height = second.Height;
+				projectorWindow.WindowStyle = WindowStyle.None;
+				projectorWindow.WindowState = WindowState.Maximized;
 			}
 			projectorWindow.Show();
 			this.Activate();
@@ -106,6 +113,14 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			{
 				var bmp = GenerateArucoMarkerBitmap(i, QrBaseSize);
 				projectorWindow.SetMarkerSource(i, bmp);
+			}
+			if (_usingRealMarkers)
+			{
+				AppendStatus("Projector: Using real ArUco marker PNGs (7x7_250).");
+			}
+			else
+			{
+				AppendStatus("WARNING: Projector markers are placeholders (not real ArUco). Place 7x7_250 PNGs in bin/Debug/Markers or bin/Release/Markers.");
 			}
 			// Default positions: four corners inset by margin
 			InitializeDefaultMarkerPositions();
@@ -170,14 +185,14 @@ namespace KinectCalibrationWPF.CalibrationWizard
 
 		private void HideCameraButton_Click(object sender, RoutedEventArgs e)
 		{
-			if (CameraFeedImage.Visibility == Visibility.Visible)
+			if (CameraFeed.Visibility == Visibility.Visible)
 			{
-				CameraFeedImage.Visibility = Visibility.Collapsed;
+				CameraFeed.Visibility = Visibility.Collapsed;
 				HideCameraButton.Content = "Show Camera View";
 			}
 			else
 			{
-				CameraFeedImage.Visibility = Visibility.Visible;
+				CameraFeed.Visibility = Visibility.Visible;
 				HideCameraButton.Content = "Hide Camera View";
 			}
 		}
@@ -198,27 +213,43 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					StatusText.Foreground = Brushes.Orange;
 					return;
 				}
-				StatusText.Text = "Camera frame acquired.";
+				AppendStatus("Camera frame acquired.");
 
 				int detected = 0;
 				using (var bgra = BitmapSourceConverter.ToMat(src))
 				using (var bgr = new Mat())
-				using (var hsv = new Mat())
-				using (var bw = new Mat())
+				using (var annotated = new Mat())
 				{
 					if (bgra.Empty()) { StatusText.Text = "Image conversion failed (empty image)."; StatusText.Foreground = Brushes.Orange; return; }
-					StatusText.Text = "Image converted for processing.";
+					AppendStatus("Image converted for processing.");
 					Cv2.CvtColor(bgra, bgr, ColorConversionCodes.BGRA2BGR);
-					Cv2.CvtColor(bgr, hsv, ColorConversionCodes.BGR2HSV);
-					int hueMin = HueSlider != null ? (int)HueSlider.Value : _hueMin;
-					int satMin = SaturationSlider != null ? (int)SaturationSlider.Value : _satMin;
-					int valMin = ValueSlider != null ? (int)ValueSlider.Value : _valMin;
-					Cv2.InRange(hsv,
-						new Scalar(hueMin, satMin, valMin),
-						new Scalar(179, 255, 255),
-						bw);
-					StatusText.Text = "Image processed successfully.";
-					detected = DetectArucoOnBinary(bw);
+					var dict = CvAruco.GetPredefinedDictionary(PredefinedDictionaryName.Dict4X4_50);
+					Point2f[][] corners; int[] ids; var parameters = new DetectorParameters();
+					CvAruco.DetectMarkers(bgr, dict, out corners, out ids, parameters, out _);
+					_detectedCorners = corners; _detectedIds = ids;
+					detected = (ids != null) ? ids.Length : 0;
+					if (detected >= 1)
+					{
+						bgr.CopyTo(annotated);
+						for (int i = 0; i < corners.Length; i++)
+						{
+							if (corners[i] == null || corners[i].Length < 4) continue;
+							var tl = corners[i][0];
+							Cv2.Circle(annotated, (OpenCvSharp.Point)tl, 8, new Scalar(0, 0, 255), thickness: -1);
+						}
+						using (var annotatedBgra = new Mat())
+						{
+							Cv2.CvtColor(annotated, annotatedBgra, ColorConversionCodes.BGR2BGRA);
+							var bmp = BitmapSourceConverter.ToBitmapSource(annotatedBgra);
+							bmp.Freeze();
+							CameraFeed.Source = bmp;
+						}
+						AppendStatus($"Detected {detected} markers (4x4_50) and drew TL dots.");
+					}
+					else
+					{
+						AppendStatus("No markers detected with 4x4_50.");
+					}
 				}
 
 				markersDetected = detected >= 4;
@@ -240,7 +271,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				}
 
 				// Reveal camera view again (if hidden) and show red dots only
-				CameraFeedImage.Visibility = Visibility.Visible;
+				CameraFeed.Visibility = Visibility.Visible;
 				HideCameraButton.Content = "Hide Camera View";
 			}
 			catch
@@ -250,30 +281,166 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 		}
 
-		private int DetectArucoOnBinary(Mat bw)
+		private void AppendStatus(string message)
 		{
-			var dict = CvAruco.GetPredefinedDictionary(PredefinedDictionaryName.Dict7X7_250);
-			Point2f[][] corners;
+			try
+			{
+				StatusText.Text += "\n" + message;
+			}
+			catch { }
+		}
+
+		private void SaveDiagnostics(Mat bgr, Mat gray, Mat bw)
+		{
+			string ts = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+			var destinations = new List<string>();
+			try
+			{
+				string picsDir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "KinectCalibrationDiagnostics");
+				if (!Directory.Exists(picsDir)) Directory.CreateDirectory(picsDir);
+				Cv2.ImWrite(System.IO.Path.Combine(picsDir, $"color_{ts}.png"), bgr);
+				Cv2.ImWrite(System.IO.Path.Combine(picsDir, $"gray_{ts}.png"), gray);
+				Cv2.ImWrite(System.IO.Path.Combine(picsDir, $"hsvmask_{ts}.png"), bw);
+				destinations.Add(picsDir);
+			}
+			catch (Exception ex)
+			{
+				AppendStatus($"Diagnostics save to Pictures failed: {ex.Message}");
+			}
+			try
+			{
+				string appDir = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Diagnostics");
+				if (!Directory.Exists(appDir)) Directory.CreateDirectory(appDir);
+				Cv2.ImWrite(System.IO.Path.Combine(appDir, $"color_{ts}.png"), bgr);
+				Cv2.ImWrite(System.IO.Path.Combine(appDir, $"gray_{ts}.png"), gray);
+				Cv2.ImWrite(System.IO.Path.Combine(appDir, $"hsvmask_{ts}.png"), bw);
+				destinations.Add(appDir);
+			}
+			catch (Exception ex)
+			{
+				AppendStatus($"Diagnostics save to App folder failed: {ex.Message}");
+			}
+			if (destinations.Count > 0)
+			{
+				AppendStatus("Saved diagnostics to:" + string.Join(", ", destinations));
+			}
+		}
+
+		// Keyboard: select and nudge projector markers
+		private int _selectedMarkerIndex = 0;
+		private void Screen2_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+		{
+			if (projectorWindow == null) return;
+			if (e.Key == System.Windows.Input.Key.Tab)
+			{
+				_selectedMarkerIndex = (_selectedMarkerIndex + 1) % 4;
+				projectorWindow.HighlightMarker(_selectedMarkerIndex);
+				AppendStatus($"Selected marker: {_selectedMarkerIndex}");
+				e.Handled = true;
+				return;
+			}
+			double step = 5.0;
+			if (e.Key == System.Windows.Input.Key.Up) { projectorWindow.HighlightMarker(_selectedMarkerIndex); projectorWindow.NudgeSelected(0, -step); e.Handled = true; }
+			else if (e.Key == System.Windows.Input.Key.Down) { projectorWindow.HighlightMarker(_selectedMarkerIndex); projectorWindow.NudgeSelected(0, step); e.Handled = true; }
+			else if (e.Key == System.Windows.Input.Key.Left) { projectorWindow.HighlightMarker(_selectedMarkerIndex); projectorWindow.NudgeSelected(-step, 0); e.Handled = true; }
+			else if (e.Key == System.Windows.Input.Key.Right) { projectorWindow.HighlightMarker(_selectedMarkerIndex); projectorWindow.NudgeSelected(step, 0); e.Handled = true; }
+		}
+
+		private int DetectArucoOnImageWithLogging(Mat imageSingleChannel, Mat hsvMask)
+		{
+			AppendStatus("Pass 1: 7x7 default params on grayscale...");
+			if (TryDetect(imageSingleChannel, PredefinedDictionaryName.Dict7X7_250, out var firstCorners))
+			{
+				AppendStatus("Pass 1 success.");
+				return AddDetections(firstCorners);
+			}
+
+			AppendStatus("Pass 2: 7x7 stronger thresholds...");
+			if (TryDetect(imageSingleChannel, PredefinedDictionaryName.Dict7X7_250, out var secondCorners, strong: true))
+			{
+				AppendStatus("Pass 2 success.");
+				return AddDetections(secondCorners);
+			}
+
+			// Pass 3: inverted image
+			using (var inverted = new Mat())
+			{
+				Cv2.BitwiseNot(imageSingleChannel, inverted);
+				AppendStatus("Pass 3: 7x7 on inverted grayscale...");
+				if (TryDetect(inverted, PredefinedDictionaryName.Dict7X7_250, out var invCorners, strong: true))
+				{
+					AppendStatus("Pass 3 success.");
+					return AddDetections(invCorners);
+				}
+			}
+
+			AppendStatus("Pass 4: fallback 6x6 with stronger thresholds...");
+			if (TryDetect(imageSingleChannel, PredefinedDictionaryName.Dict6X6_250, out var sixCorners, strong: true))
+			{
+				AppendStatus("Pass 4 success.");
+				return AddDetections(sixCorners);
+			}
+
+			// Pass 5: last resort on HSV mask (if any)
+			if (hsvMask != null && !hsvMask.Empty())
+			{
+				AppendStatus("Pass 5: 7x7 on HSV mask...");
+				if (TryDetect(hsvMask, PredefinedDictionaryName.Dict7X7_250, out var hsvCorners, strong: true))
+				{
+					AppendStatus("Pass 5 success.");
+					return AddDetections(hsvCorners);
+				}
+			}
+
+			AppendStatus("No markers detected in all passes.");
+			return 0;
+		}
+
+		private bool TryDetect(Mat gray, PredefinedDictionaryName dictName, out Point2f[][] corners, bool strong = false)
+		{
+			var dict = CvAruco.GetPredefinedDictionary(dictName);
 			int[] ids;
 			var parameters = new DetectorParameters();
-			// Fine-tune parameters for projector lighting
 			parameters.CornerRefinementMethod = CornerRefineMethod.Subpix;
-			parameters.AdaptiveThreshWinSizeMin = 5;
-			parameters.AdaptiveThreshWinSizeMax = 25;
-			parameters.AdaptiveThreshWinSizeStep = 5;
-			parameters.MinMarkerPerimeterRate = 0.02;
-			CvAruco.DetectMarkers(bw, dict, out corners, out ids, parameters, out _);
+			parameters.CornerRefinementWinSize = 7;
+			parameters.CornerRefinementMaxIterations = 50;
+			parameters.CornerRefinementMinAccuracy = 0.01;
+			parameters.AdaptiveThreshWinSizeMin = strong ? 3 : 5;
+			parameters.AdaptiveThreshWinSizeMax = strong ? 35 : 25;
+			parameters.AdaptiveThreshWinSizeStep = strong ? 2 : 5;
+			parameters.AdaptiveThreshConstant = strong ? 5 : 7;
+			parameters.MinMarkerPerimeterRate = strong ? 0.01 : 0.02;
+			parameters.MaxMarkerPerimeterRate = 4.0;
+			parameters.MaxErroneousBitsInBorderRate = strong ? 0.5 : 0.35;
+			parameters.MinCornerDistanceRate = 0.02;
+			parameters.PerspectiveRemoveIgnoredMarginPerCell = 0.13;
+			parameters.MarkerBorderBits = 1;
+			parameters.MinDistanceToBorder = 1;
+			parameters.MinOtsuStdDev = 5.0;
+			try { parameters.DetectInvertedMarker = true; } catch { }
+			CvAruco.DetectMarkers(gray, dict, out corners, out ids, parameters, out _);
+			return corners != null && corners.Length > 0;
+		}
+
+		private int AddDetections(Point2f[][] corners)
+		{
 			int found = 0;
-			if (corners != null)
+			for (int i = 0; i < corners.Length; i++)
 			{
-				for (int i = 0; i < corners.Length; i++)
+				var quad = corners[i];
+				if (quad != null && quad.Length >= 4)
 				{
-					var quad = corners[i];
-					if (quad != null && quad.Length >= 4)
+					AddMarkerFromQuad(quad);
+					// Outline the detected marker for visual confirmation
+					var pts = quad.Select(p => new System.Windows.Point(p.X, p.Y)).ToArray();
+					for (int e = 0; e < 4; e++)
 					{
-						AddMarkerFromQuad(quad);
-						found++;
+						var a = ColorToCanvas(new System.Windows.Point(pts[e].X, pts[e].Y));
+						var b = ColorToCanvas(new System.Windows.Point(pts[(e + 1) % 4].X, pts[(e + 1) % 4].Y));
+						var line = new System.Windows.Shapes.Line { X1 = a.X, Y1 = a.Y, X2 = b.X, Y2 = b.Y, StrokeThickness = 2, Stroke = Brushes.Lime }; 
+						MarkersOverlay.Children.Add(line);
 					}
+					found++;
 				}
 			}
 			return found;
@@ -332,15 +499,51 @@ namespace KinectCalibrationWPF.CalibrationWizard
 
 		private void CalibrateButton_Click(object sender, RoutedEventArgs e)
 		{
-			if (!markersDetected)
+			// Preconditions: we need detected corners and IDs (preferably IDs 0..3)
+			if (_detectedIds == null || _detectedCorners == null || _detectedIds.Length < 4)
 			{
-				StatusText.Text = "Status: No QRs detected";
+				StatusText.Text = "Status: Need 4 detected markers before calibrating";
 				StatusText.Foreground = Brushes.Orange;
 				return;
 			}
-			StatusText.Text = "Status: CALIBRATED";
-			StatusText.Foreground = Brushes.Green;
-			NextButton.IsEnabled = true;
+
+			// Build sorted projector centers by marker index 0..3
+			var projectorPts = new Point2f[4];
+			for (int i = 0; i < 4; i++)
+			{
+				var pc = projectorWindow != null ? projectorWindow.GetMarkerCenter(i) : new System.Windows.Point(double.NaN, double.NaN);
+				if (double.IsNaN(pc.X) || double.IsNaN(pc.Y))
+				{
+					StatusText.Text = "Status: Projector marker centers not available";
+					StatusText.Foreground = Brushes.Orange;
+					return;
+				}
+				projectorPts[i] = new Point2f((float)pc.X, (float)pc.Y);
+			}
+
+			// Build sorted camera TL corners by marker ID 0..3
+			var cameraPts = new Point2f[4];
+			var cameraPtsListForSave = new List<System.Windows.Point>();
+			for (int id = 0; id < 4; id++)
+			{
+				int idx = Array.IndexOf(_detectedIds, id);
+				if (idx < 0 || _detectedCorners[idx] == null || _detectedCorners[idx].Length < 4)
+				{
+					StatusText.Text = $"Status: Missing detected marker with ID {id}";
+					StatusText.Foreground = Brushes.Orange;
+					return;
+				}
+				var tl = _detectedCorners[idx][0];
+				cameraPts[id] = new Point2f(tl.X, tl.Y);
+				cameraPtsListForSave.Add(new System.Windows.Point(tl.X, tl.Y));
+			}
+
+			// Compute perspective transform: camera -> projector
+			var H = Cv2.GetPerspectiveTransform(cameraPts, projectorPts);
+			double[,] H33 = new double[3,3];
+			for (int r = 0; r < 3; r++)
+				for (int c = 0; c < 3; c++)
+					H33[r, c] = H.Get<double>(r, c);
 
 			var cfg = CalibrationStorage.Load() ?? new CalibrationConfig();
 			cfg.ProjectorMarkerPositions.Clear();
@@ -351,8 +554,28 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			cfg.ProjectorMarkerScale = QrSizeSlider.Value;
 			cfg.DetectionExposure = ValueSlider != null ? ValueSlider.Value : _currentBrightnessThreshold;
 			cfg.DetectedMarkerCentersColor = new List<System.Windows.Point>(lastDetectedCentersColor);
+			cfg.HsvHueMin = HueSlider != null ? (int)HueSlider.Value : _hueMin;
+			cfg.HsvSatMin = SaturationSlider != null ? (int)SaturationSlider.Value : _satMin;
+			cfg.HsvValMin = ValueSlider != null ? (int)ValueSlider.Value : _valMin;
+			cfg.ProjectorMarkerCenters = projectorPts.Select(p => new System.Windows.Point(p.X, p.Y)).ToList();
+			cfg.CameraMarkerCornersTL = cameraPtsListForSave;
+			cfg.PerspectiveTransform3x3 = H33;
 			cfg.SavedUtc = DateTime.UtcNow;
-			try { CalibrationStorage.Save(cfg); } catch { }
+
+			try
+			{
+				CalibrationStorage.Save(cfg);
+				MessageBox.Show("Calibration successful!");
+				StatusText.Text = "Status: CALIBRATED";
+				StatusText.Foreground = Brushes.Green;
+				NextButton.IsEnabled = true;
+				projectorWindow?.Close();
+			}
+			catch (Exception ex)
+			{
+				StatusText.Text = $"Status: Failed to save calibration ({ex.Message})";
+				StatusText.Foreground = Brushes.OrangeRed;
+			}
 		}
 
 		private void NextButton_Click(object sender, RoutedEventArgs e)
@@ -382,6 +605,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					bmp.UriSource = new Uri(file, UriKind.Absolute);
 					bmp.EndInit();
 					bmp.Freeze();
+					_usingRealMarkers = true;
 					return bmp;
 				}
 			}
